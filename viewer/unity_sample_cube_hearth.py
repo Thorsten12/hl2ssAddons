@@ -8,7 +8,7 @@ import hl2ss_lnm
 import hl2ss_rus
 
 # Settings --------------------------------------------------------------------
-host = '192.168.137.174'
+host = '192.168.137.179'
 num_cubes = 50
 scale_factor = 0.02
 scale = [scale_factor, scale_factor, scale_factor]

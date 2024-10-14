@@ -10,7 +10,7 @@ import threading
 from Tools import hl2ss_3dcv
 
 # Einstellungen
-host = '192.168.137.174'
+host = '192.168.137.179'
 fps = 30
 base_folder_name = 'data'
 

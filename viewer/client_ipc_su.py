@@ -8,11 +8,12 @@ import hl2ss
 import hl2ss_lnm
 import hl2ss_3dcv
 import hl2ss_sa
+import pyvista as pv
 
 # Settings --------------------------------------------------------------------
 
 # HoloLens address
-host = '192.168.137.174'
+host = '192.168.137.179'
 
 # Query parameters
 enable_scene_object_quads = True
@@ -99,11 +100,21 @@ for item in result.items:
 
     for mesh in item.meshes:
         mesh.unpack()
-        hl2ss_3dcv.su_normalize(mesh, item.location @ result.pose)
+        #hl2ss_3dcv.su_normalize(mesh, item.location @ result.pose)
         open3d_mesh = hl2ss_sa.su_mesh_to_open3d_triangle_mesh(mesh)
-        open3d_mesh = hl2ss_sa.open3d_triangle_mesh_swap_winding(open3d_mesh)
+        #open3d_mesh = hl2ss_sa.open3d_triangle_mesh_swap_winding(open3d_mesh)
         open3d_mesh.compute_vertex_normals()
         open3d_mesh.paint_uniform_color(kind_color[int(item.kind)])
         open3d_meshes.append(open3d_mesh)
 
-o3d.visualization.draw_geometries(open3d_meshes, mesh_show_back_face=False)
+#o3d.visualization.draw_geometries(open3d_meshes, mesh_show_back_face=False)
+point_cloud = pv.PolyData(open3d_mesh)
+
+# Erstelle ein Plot-Objekt
+plotter = pv.Plotter()
+
+# Füge die Punktwolke hinzu
+plotter.add_mesh(point_cloud, point_size=15, render_points_as_spheres=True, color='red')
+
+# Plot anzeigen
+plotter.show()
