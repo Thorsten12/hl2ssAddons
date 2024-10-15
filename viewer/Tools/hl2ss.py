@@ -2092,6 +2092,7 @@ class _sm_mesh:
 
 
 class ipc_sm(_context_manager):
+    
     _CMD_CREATE_OBSERVER = 0x00
     _CMD_SET_VOLUMES = 0x01
     _CMD_GET_OBSERVED_SURFACES = 0x02
@@ -2102,7 +2103,9 @@ class ipc_sm(_context_manager):
         self.port = port
 
     def open(self):
+        print("here")
         self._client = _client()
+        print(self._client)
         self._client.open(self.host, self.port)
 
     def create_observer(self):

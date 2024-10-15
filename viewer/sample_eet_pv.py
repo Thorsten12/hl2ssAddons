@@ -73,9 +73,13 @@ if __name__ == '__main__':
     print("volumes")
     # Download observed surfaces
     sm_manager = hl2ss_sa.sm_manager(host, triangles_per_cubic_meter, mesh_threads)
+    print("2")
     sm_manager.open()
+    print("3")
     sm_manager.set_volumes(volumes)
+    print("4")  
     sm_manager.get_observed_surfaces()
+    print("5")
     
     print("surfaces")
     # Start PV and EET streams ------------------------------------------------

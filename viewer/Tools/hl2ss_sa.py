@@ -6,6 +6,8 @@ from Tools import hl2ss
 from Tools import hl2ss_lnm
 from Tools import hl2ss_3dcv
 
+import pyvista as pv
+
 
 # ------------------------------------------------------------------------------
 # Open3D Interop
@@ -48,6 +50,7 @@ class _sm_manager_entry:
 
 class sm_manager:
     def __init__(self, host, triangles_per_cubic_meter, threads):
+        print("s")
         self._tpcm = triangles_per_cubic_meter
         self._threads = threads
         self._vpf = hl2ss.SM_VertexPositionFormat.R16G16B16A16IntNormalized
@@ -55,6 +58,7 @@ class sm_manager:
         self._vnf = hl2ss.SM_VertexNormalFormat.R8G8B8A8IntNormalized
         self._normals = True
         self._bounds = False
+        
         self._ipc = hl2ss_lnm.ipc_sm(host, hl2ss.IPCPort.SPATIAL_MAPPING)
         self._surfaces = {}
         self._volumes = None
@@ -72,42 +76,45 @@ class sm_manager:
     def _get_surfaces(self):
         return self._surfaces.values()
 
-    def get_observed_surfaces(self):
-        self._updated_surfaces = {}
-        tasks = hl2ss.sm_mesh_task()
-        updated_surfaces = []
+    def get_observed_surfaces(self): 
+        try:
+            self._updated_surfaces = {}
+            tasks = hl2ss.sm_mesh_task()
+            updated_surfaces = []
 
-        if (self._volumes is not None):
-            self._ipc.set_volumes(self._volumes)
-            self._volumes = None
+            if (self._volumes is not None):
+                self._ipc.set_volumes(self._volumes)
+                self._volumes = None
 
-        for surface_info in self._ipc.get_observed_surfaces():
-            id = surface_info.id
-            surface_info.id = surface_info.id.hex()
-            if (surface_info.id in self._surfaces):
-                previous_entry = self._surfaces[surface_info.id]
-                if (surface_info.update_time <= previous_entry.update_time):
-                    self._updated_surfaces[surface_info.id] = previous_entry
+            for surface_info in self._ipc.get_observed_surfaces():
+                id = surface_info.id
+                surface_info.id = surface_info.id.hex()
+                if (surface_info.id in self._surfaces):
+                    previous_entry = self._surfaces[surface_info.id]
+                    if (surface_info.update_time <= previous_entry.update_time):
+                        self._updated_surfaces[surface_info.id] = previous_entry
+                        continue
+                tasks.add_task(id, self._tpcm, self._vpf, self._tif, self._vnf, self._normals, self._bounds)
+                updated_surfaces.append(surface_info)
+
+            count = len(updated_surfaces)
+            if (count <= 0):
+                return
+
+            for index, mesh in self._ipc.get_meshes(tasks, self._threads).items():
+                if (mesh is None):
                     continue
-            tasks.add_task(id, self._tpcm, self._vpf, self._tif, self._vnf, self._normals, self._bounds)
-            updated_surfaces.append(surface_info)
+                mesh.unpack(self._vpf, self._tif, self._vnf)
+                hl2ss_3dcv.sm_mesh_cast(mesh, np.float64, np.uint32, np.float64)
+                hl2ss_3dcv.sm_mesh_normalize(mesh)
+                rcs = o3d.t.geometry.RaycastingScene()
+                rcs.add_triangles(o3d.t.geometry.TriangleMesh.from_legacy(sm_mesh_to_open3d_triangle_mesh(mesh)))
+                surface_info = updated_surfaces[index]
+                self._updated_surfaces[surface_info.id] = _sm_manager_entry(surface_info.update_time, mesh, rcs)
 
-        count = len(updated_surfaces)
-        if (count <= 0):
-            return
-
-        for index, mesh in self._ipc.get_meshes(tasks, self._threads).items():
-            if (mesh is None):
-                continue
-            mesh.unpack(self._vpf, self._tif, self._vnf)
-            hl2ss_3dcv.sm_mesh_cast(mesh, np.float64, np.uint32, np.float64)
-            hl2ss_3dcv.sm_mesh_normalize(mesh)
-            rcs = o3d.t.geometry.RaycastingScene()
-            rcs.add_triangles(o3d.t.geometry.TriangleMesh.from_legacy(sm_mesh_to_open3d_triangle_mesh(mesh)))
-            surface_info = updated_surfaces[index]
-            self._updated_surfaces[surface_info.id] = _sm_manager_entry(surface_info.update_time, mesh, rcs)
-
-        self._load_updated_surfaces()
+            self._load_updated_surfaces()
+        except Exception as e:
+            raise e
 
     def close(self):
         self._ipc.close()
