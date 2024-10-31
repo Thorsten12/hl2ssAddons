@@ -64,6 +64,7 @@ image_folder = os.path.join(data_folder, 'images')
 print(f"Writing data to: {csv_filename}")
 print(f"Saving images to: {image_folder}")
 
+# CSV-Datei schreiben mit den umbenannten Spaltennamen
 with open(csv_filename, 'w', newline='') as csvfile:
     csv_writer = csv.writer(csvfile)
     csv_writer.writerow([
@@ -85,12 +86,14 @@ with open(csv_filename, 'w', newline='') as csvfile:
         'HoloLens Up X', 'HoloLens Up Y', 'HoloLens Up Z'
     ])
 
+    # Erfassen des Startpunkts für Positions-Offset
+    start_x, start_z = None, None
+
     while enable:
         data_eye_tracking = client_eye_tracker.get_next_packet()
         eet = hl2ss.unpack_eet(data_eye_tracking.payload)
 
         data_video = client_video.get_next_packet()
-
         data_spatial = client_spatial.get_next_packet()
         si = hl2ss.unpack_si(data_spatial.payload)
 
@@ -108,6 +111,18 @@ with open(csv_filename, 'w', newline='') as csvfile:
             forward = [0, 0, 0]
             up = [0, 0, 0]
 
+        # Startwerte für Position X und Z setzen, wenn sie noch nicht festgelegt sind
+        if start_x is None and start_z is None:
+            start_x, start_z = position[0], position[2]
+
+        # Offset der Position X und Z anwenden
+        position[0] -= start_x
+        position[2] -= start_z
+
+        # Pfadname anpassen
+        image_filename = image_filename.replace('data2\\images\\', '')
+
+        # Schreiben der Zeile in die CSV-Datei
         csv_writer.writerow([
             datetime.datetime.now().isoformat(),
             data_eye_tracking.timestamp,
@@ -142,4 +157,3 @@ client_eye_tracker.close()
 client_video.close()
 client_spatial.close()
 listener.join()
-
