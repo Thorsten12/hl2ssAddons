@@ -20,7 +20,7 @@ import hl2ss_lnm
 # Settings --------------------------------------------------------------------
 
 # HoloLens address
-host = "192.168.137.174"
+host = "192.168.137.195"
 
 # Operating mode
 # 0: video
@@ -81,9 +81,10 @@ client.open()
 
 while (enable):
     data = client.get_next_packet()
-
+    print("data:", data)
+    print("payload:", data.payload)
     print(f'Frame captured at {data.timestamp}')
-    print(f'Sensor Ticks: {data.payload.sensor_ticks}')
+    #print(f'Sensor Ticks: {data.payload.sensor_ticks}')
     print(f'Pose')
     print(data.pose)    
     

@@ -7,7 +7,10 @@ import csv
 import datetime
 import os
 import threading
+import json
 from Tools import hl2ss_3dcv
+
+import hl2ss_utilities
 
 # Einstellungen
 host = '192.168.137.195'
@@ -21,6 +24,37 @@ height = 1080
 framerate = fps
 profile = hl2ss.VideoProfile.H265_MAIN
 decoded_format = 'bgr24'
+
+"""
+Spatial Mapping
+"""
+sphere_center = [0, 0, 0]
+sphere_radius = 5
+
+
+
+'''
+Für TOF
+'''
+divisor = 1
+profile_z  = hl2ss.DepthProfile.SAME
+bitrate    = None
+
+if (mode == hl2ss.StreamMode.MODE_2):
+    data = hl2ss_lnm.download_calibration_rm_depth_ahat(host, hl2ss.StreamPort.RM_DEPTH_AHAT)
+    print('Calibration data')
+    print('Image point to unit plane')
+    print(data.uv2xy)
+    print('Extrinsics')
+    print(data.extrinsics)
+    print(f'Scale: {data.scale}')
+    print(f'Alias: {data.alias}')
+    print('Undistort map')
+    print(data.undistort_map)
+    print('Intrinsics (undistorted only)')
+    print(data.intrinsics)
+    quit()
+
 
 enable = True
 
@@ -36,11 +70,18 @@ def get_unique_folder(base_name):
         if not os.path.exists(folder_name):
             os.makedirs(folder_name)
             os.makedirs(os.path.join(folder_name, 'images'))
+            os.makedirs(os.path.join(folder_name, 'depth'))
+            os.makedirs(os.path.join(folder_name, 'AB'))
             return folder_name
         index += 1
 
 def save_image(image_data, filename):
     cv2.imwrite(filename, image_data)
+
+def save_depth(arr, filename):
+    np.save(filename, arr, allow_pickle=True, fix_imports=True)
+
+
 
 listener = keyboard.Listener(on_press=on_press)
 listener.start()
@@ -57,17 +98,35 @@ client_video.open()
 client_spatial = hl2ss_lnm.rx_si(host, hl2ss.StreamPort.SPATIAL_INPUT)
 client_spatial.open()
 
+client_ahat = hl2ss_lnm.rx_rm_depth_ahat(host, hl2ss.StreamPort.RM_DEPTH_AHAT, mode=mode, divisor=divisor, profile_z=profile_z, profile_ab=profile)
+client_ahat.open()
+
+
+
+# Spatial Mapping manager settings
+triangles_per_cubic_meter = 1000
+mesh_threads = 2
+sphere_center = [0, 0, 0]
+sphere_radius = 5
+
+
 data_folder = get_unique_folder(base_folder_name)
 csv_filename = os.path.join(data_folder, 'data.csv')
 image_folder = os.path.join(data_folder, 'images')
+depth_folder = os.path.join(data_folder, 'depth')
+ab_folder = os.path.join(data_folder, 'AB')
+
 
 print(f"Writing data to: {csv_filename}")
 print(f"Saving images to: {image_folder}")
+print(f"Saving Depth to: {depth_folder}")
+print(f"Saving AB to: {ab_folder}")
+
 
 with open(csv_filename, 'w', newline='') as csvfile:
     csv_writer = csv.writer(csvfile)
     csv_writer.writerow([
-        'Timestamp', 'HoloLens Eye Tracker Timestamp', 'Calibration Valid',
+        'Timestamp', 'HoloLens_Eye_Tracker_Timestamp', 'Calibration_Valid',
         'Combined Gaze Valid', 'Combined Gaze Origin X', 'Combined Gaze Origin Y', 'Combined Gaze Origin Z',
         'Combined Gaze Direction X', 'Combined Gaze Direction Y', 'Combined Gaze Direction Z',
         'Left Gaze Valid', 'Left Gaze Origin X', 'Left Gaze Origin Y', 'Left Gaze Origin Z',
@@ -82,22 +141,30 @@ with open(csv_filename, 'w', newline='') as csvfile:
         'Image Filename',
         'HoloLens Position X', 'HoloLens Position Y', 'HoloLens Position Z',
         'HoloLens Forward X', 'HoloLens Forward Y', 'HoloLens Forward Z',
-        'HoloLens Up X', 'HoloLens Up Y', 'HoloLens Up Z'
+        'HoloLens Up X', 'HoloLens Up Y', 'HoloLens Up Z','depth_timestamp','depth_payload'
     ])
 
     # Erfassen des Startpunkts für Positions-Offset
     start_x, start_z = None, None
 
+    
     while enable:
         data_eye_tracking = client_eye_tracker.get_next_packet()
         eet = hl2ss.unpack_eet(data_eye_tracking.payload)
+        data_ahat = client_ahat.get_next_packet()
 
         data_video = client_video.get_next_packet()
         data_spatial = client_spatial.get_next_packet()
         si = hl2ss.unpack_si(data_spatial.payload)
 
         image_filename = os.path.join(image_folder, f"image_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.jpg")
+        depth_filename = os.path.join(depth_folder, f"image_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.npy")
+        ab_filename = os.path.join(ab_folder, f"image_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.npy")
+
         threading.Thread(target=save_image, args=(data_video.payload.image, image_filename)).start()
+        threading.Thread(target=save_depth, args=(data_ahat.payload.depth, depth_filename)).start()
+        threading.Thread(target=save_depth, args=(data_ahat.payload.ab, ab_filename)).start()
+
 
         # Extrahieren der Position und Orientierung aus si
         if si.is_valid_head_pose():
@@ -120,6 +187,7 @@ with open(csv_filename, 'w', newline='') as csvfile:
 
         # Pfadname anpassen
         image_filename = image_filename.replace('data2\\images\\', '')
+        
 
         # Schreiben der Zeile in die CSV-Datei
         csv_writer.writerow([
@@ -147,7 +215,9 @@ with open(csv_filename, 'w', newline='') as csvfile:
             image_filename,
             *position,  # Position
             *forward,   # Forward-Vektor
-            *up         # Up-Vektor
+            *up,         # Up-Vektor
+            data_ahat.timestamp,
+            data_ahat.payload.sensor_ticks
         ])
 
         print(f"Data recorded at {datetime.datetime.now().isoformat()}")
