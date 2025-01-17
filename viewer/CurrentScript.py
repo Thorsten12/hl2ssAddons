@@ -23,7 +23,7 @@ import threading
 # Settings --------------------------------------------------------------------
 
 # HoloLens 2 address
-host = "192.168.137.195"
+host = "192.168.137.49"
 # Camera parameters
 # See etc/hl2_capture_formats.txt for a list of supported formats
 pv_width     = 760
