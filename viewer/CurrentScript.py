@@ -23,7 +23,7 @@ import threading
 # Settings --------------------------------------------------------------------
 
 # HoloLens 2 address
-host = "192.168.137.49"
+host = "192.168.137.140"
 # Camera parameters
 # See etc/hl2_capture_formats.txt for a list of supported formats
 pv_width     = 760
@@ -122,6 +122,11 @@ if __name__ == '__main__':
                 return folder_name
             index += 1
 
+    def format_list(lst):
+        """ Hilfsfunktion, um Listen/Arrays als CSV-kompatible Strings zu formatieren """
+        if isinstance(lst, (list, np.ndarray)):  # Falls Liste oder NumPy-Array
+            return " ".join(map(str, lst))  # Konvertiere jedes Element zu String und verbinde mit Leerzeichen
+        return lst  # Falls kein Array, einfach zurückgeben
 
     data_folder = get_unique_folder("data")
     csv_filename = os.path.join(data_folder, 'data.csv')
@@ -154,6 +159,10 @@ if __name__ == '__main__':
             'LeftImagePoint',
             'RightImagePoint',
             'CombinedImagePoint',
+            'Focal_lenght',
+            'Principal_point',
+            'Intrinsics',
+            'Extrinsics'
             'LeftGazeOrigin',
             'LeftGazeDirection',
             'RightGazeOrigin',
@@ -209,50 +218,56 @@ if __name__ == '__main__':
             pv_extrinsics = np.eye(4, 4, dtype=np.float32)
             pv_intrinsics, pv_extrinsics = hl2ss_3dcv.pv_fix_calibration(pv_intrinsics, pv_extrinsics)
 
+            
+
             # Compute world to PV image transformation matrix ---------------------
-            world_to_image = hl2ss_3dcv.world_to_reference(data_pv.pose) @ hl2ss_3dcv.rignode_to_camera(pv_extrinsics) @ hl2ss_3dcv.camera_to_image(pv_intrinsics)
+            try: 
+                world_to_image = hl2ss_3dcv.world_to_reference(data_pv.pose) @ hl2ss_3dcv.rignode_to_camera(pv_extrinsics) @ hl2ss_3dcv.camera_to_image(pv_intrinsics)
 
-            # Draw Left Gaze Pointer ----------------------------------------------
-            if (eet.left_ray_valid):
-                local_left_ray = hl2ss_utilities.si_ray_to_vector(eet.left_ray.origin, eet.left_ray.direction)
-                left_ray = hl2ss_utilities.si_ray_transform(local_left_ray, data_eet.pose)
-                d = sm_manager.cast_rays(left_ray)
-                if (np.isfinite(d)):
-                    left_point = hl2ss_utilities.si_ray_to_point(left_ray, d)
-                    left_image_point = hl2ss_3dcv.project(left_point, world_to_image)
-                    #hl2ss_utilities.draw_points(image, left_image_point.astype(np.int32), radius, left_color, thickness)
+                # Draw Left Gaze Pointer ----------------------------------------------
+                if (eet.left_ray_valid):
+                    local_left_ray = hl2ss_utilities.si_ray_to_vector(eet.left_ray.origin, eet.left_ray.direction)
+                    left_ray = hl2ss_utilities.si_ray_transform(local_left_ray, data_eet.pose)
+                    d = sm_manager.cast_rays(left_ray)
+                    if (np.isfinite(d)):
+                        left_point = hl2ss_utilities.si_ray_to_point(left_ray, d)
+                        left_image_point = hl2ss_3dcv.project(left_point, world_to_image)
+                        #hl2ss_utilities.draw_points(image, left_image_point.astype(np.int32), radius, left_color, thickness)
                     
-            else:
-                left_image_point = null_arr
+                else:
+                    left_image_point = null_arr
 
-            #print(left_image_point)            
+              #print(left_image_point)            
 
-            # Draw Right Gaze Pointer ---------------------------------------------
-            if (eet.right_ray_valid):
-                local_right_ray = hl2ss_utilities.si_ray_to_vector(eet.right_ray.origin, eet.right_ray.direction)
-                right_ray = hl2ss_utilities.si_ray_transform(local_right_ray, data_eet.pose)
-                d = sm_manager.cast_rays(right_ray)
-                if (np.isfinite(d)):
-                    right_point = hl2ss_utilities.si_ray_to_point(right_ray, d)
-                    right_image_point = hl2ss_3dcv.project(right_point, world_to_image)
-                    #hl2ss_utilities.draw_points(image, right_image_point.astype(np.int32), radius, right_color, thickness)
-                   
-            else:
-                right_image_point = null_arr
+              # Draw Right Gaze Pointer ---------------------------------------------
+                if (eet.right_ray_valid):
+                    local_right_ray = hl2ss_utilities.si_ray_to_vector(eet.right_ray.origin, eet.right_ray.direction)
+                    right_ray = hl2ss_utilities.si_ray_transform(local_right_ray, data_eet.pose)
+                    d = sm_manager.cast_rays(right_ray)
+                    if (np.isfinite(d)):
+                        right_point = hl2ss_utilities.si_ray_to_point(right_ray, d)
+                        right_image_point = hl2ss_3dcv.project(right_point, world_to_image)
+                        #hl2ss_utilities.draw_points(image, right_image_point.astype(np.int32), radius, right_color, thickness)
 
-            #print(right_image_point)     
-            # Draw Combined Gaze Pointer ------------------------------------------
-            if (eet.combined_ray_valid):
-                local_combined_ray = hl2ss_utilities.si_ray_to_vector(eet.combined_ray.origin, eet.combined_ray.direction)
-                combined_ray = hl2ss_utilities.si_ray_transform(local_combined_ray, data_eet.pose)
-                d = sm_manager.cast_rays(combined_ray)
-                if (np.isfinite(d)):
-                    combined_point = hl2ss_utilities.si_ray_to_point(combined_ray, d)
-                    combined_image_point = hl2ss_3dcv.project(combined_point, world_to_image)
-                    #hl2ss_utilities.draw_points(image, combined_image_point.astype(np.int32), radius, combined_color, thickness)
-                    
-            else:
-                combined_image_point = null_arr
+                else:
+                    right_image_point = null_arr
+
+                #print(right_image_point)     
+                # Draw Combined Gaze Pointer ------------------------------------------
+                if (eet.combined_ray_valid):
+                    local_combined_ray = hl2ss_utilities.si_ray_to_vector(eet.combined_ray.origin, eet.combined_ray.direction)
+                    combined_ray = hl2ss_utilities.si_ray_transform(local_combined_ray, data_eet.pose)
+                    d = sm_manager.cast_rays(combined_ray)
+                    if (np.isfinite(d)):
+                        combined_point = hl2ss_utilities.si_ray_to_point(combined_ray, d)
+                        combined_image_point = hl2ss_3dcv.project(combined_point, world_to_image)
+                        #hl2ss_utilities.draw_points(image, combined_image_point.astype(np.int32), radius, combined_color, thickness)
+
+                else:
+                    combined_image_point = null_arr
+
+            except:
+                left_image_point, right_image_point, combined_image_point = None
 
             #print(combined_image_point)
 
@@ -271,22 +286,28 @@ if __name__ == '__main__':
 
             csv_writer.writerow([
                 datetime.datetime.now().isoformat(),
-                left_image_point,
-                right_image_point,
-                combined_image_point,
+                format_list(left_image_point),
+                format_list(right_image_point),
+                format_list(combined_image_point),
 
-                eet.left_ray.origin,
-                eet.left_ray.direction,
+                pv_intrinsics, 
+                pv_extrinsics,
 
-                eet.right_ray.origin,
-                eet.right_ray.direction,
+                format_list(data_pv.payload.focal_length), 
+                format_list(data_pv.payload.principal_point),
 
-                eet.combined_ray.origin,
-                eet.combined_ray.direction,
+                format_list(eet.left_ray.origin),
+                format_list(eet.left_ray.direction),
 
-                position,
-                forward,
-                up,
+                format_list(eet.right_ray.origin),
+                format_list(eet.right_ray.direction),
+
+                format_list(eet.combined_ray.origin),
+                format_list(eet.combined_ray.direction),
+
+                format_list(position),
+                format_list(forward),
+                format_list(up),
 
                 image_filename,
                 depth_filename,

@@ -21,7 +21,7 @@ import hl2ss_sa
 # Settings --------------------------------------------------------------------
 
 # HoloLens 2 address
-host = "192.168.137.195"
+host = "192.168.137.140"
 # Camera parameters
 # See etc/hl2_capture_formats.txt for a list of supported formats
 pv_width     = 760
@@ -125,7 +125,7 @@ if __name__ == '__main__':
 
         # Compute world to PV image transformation matrix ---------------------
         world_to_image = hl2ss_3dcv.world_to_reference(data_pv.pose) @ hl2ss_3dcv.rignode_to_camera(pv_extrinsics) @ hl2ss_3dcv.camera_to_image(pv_intrinsics)
-
+  
         # Draw Left Gaze Pointer ----------------------------------------------
         if (eet.left_ray_valid):
             local_left_ray = hl2ss_utilities.si_ray_to_vector(eet.left_ray.origin, eet.left_ray.direction)
