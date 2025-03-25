@@ -75,6 +75,32 @@ class command_buffer(hl2ss.umq_command_buffer):
     def set_target_mode(self, mode):
         self.add(20, struct.pack('<I', mode))
 
+    def load_ply(self, data):
+
+        try:
+            vertices = data.vertices
+            triangles = data.triangles
+
+            # Erzeuge den Binär-Stream für die Übertragung an Unity
+            data = bytearray()
+
+            # Anzahl der Vertices und Dreiecke speichern
+            data.extend(struct.pack('<II', len(vertices), len(triangles)))
+
+            # Vertices speichern (x, y, z)
+            for v in vertices:
+                data.extend(struct.pack('<fff', v[0], v[1], v[2]))
+
+            # Dreiecke speichern (index1, index2, index3)
+            for t in triangles:
+                data.extend(struct.pack('<III', t[0], t[1], t[2]))
+                self.say("lol")
+            # Sende die Daten an Unity über die add()-Methode mit ID 21 (wie load_ply)
+            
+            self.add(21, data)
+        except Exception as e:
+            TypeError(e)
+
     def debug_try_lock_pv(self):
         self.add(0xFFFFFF00, b'')
 

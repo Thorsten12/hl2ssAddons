@@ -26,6 +26,7 @@ import hl2ss_sa
 import hl2ss_rus
 
 import open3d as o3d
+import traceback
 
 # Settings --------------------------------------------------------------------
 
@@ -52,10 +53,10 @@ buffer_length = 7
 
 # Spatial Mapping manager settings
 triangles_per_cubic_meter = 30
-mesh_threads = 12
+mesh_threads = 6
 sphere_center = [0, 0, 0]
-sphere_radius = 1
-buffer_size = 5
+sphere_radius = 0.5
+buffer_size = 7
 
 stop_threads = False
 
@@ -107,7 +108,6 @@ def fetchData(queue, sink_pv, sink_eet, sink_si):
             eet = hl2ss.unpack_eet(data_eet.payload)
             si = hl2ss.unpack_si(data_si.payload)
             new_position = np.array(si.get_head_pose().position)
-
             while(queue.qsize() != 0):
                 _ = queue.get()
             # Daten in die Queue packen
@@ -125,90 +125,109 @@ def fetchData(queue, sink_pv, sink_eet, sink_si):
             time.sleep(0.1)
 
 def process_mesh_data(queue, sm_manager, shared_queue,):
+    print("mesh data started")
     """ Thread zum Verarbeiten der Mesh-Daten """
     last_time = time.time()  # Startzeit für die FPS-Berechnung
     global stop_threads
     while not stop_threads:
         try:
-            if not queue.empty():
-                data = queue.get()  # Das Dictionary abrufen
+            #print("Versuche, Daten aus der Queue zu holen...")
+            data = queue.get()  # Das Dictionary abrufen
+            #print(f"Daten erhalten: {data}")
 
-                # Die Werte aus dem Dictionary extrahieren
-                eet = data["eet"]
-                new_position = data["new_position"]
-                data_eet = data["data_eet"]
-                data_pv = data["data_pv"]
+            # Die Werte aus dem Dictionary extrahieren
+            eet = data["eet"]
+            new_position = data["new_position"]
+            data_eet = data["data_eet"]
+            data_pv = data["data_pv"]
+            #print(f"Extrahierte Werte - eet: {eet}, new_position: {new_position}, data_eet: {data_eet}, data_pv: {data_pv}")
 
-                # Berechnung im Thread durchführen
-                sm_manager = mesh_update(new_position, sm_manager)
+            # Berechnung im Thread durchführen
+            sm_manager = mesh_update(new_position, sm_manager)
+            #print("Mesh erfolgreich aktualisiert.")
 
-                #pv_intrinsics = np.array([[-data_pv.payload.focal_length[0], 0, 0, 0], [0, data_pv.payload.focal_length[1], 0, 0], [data_pv.payload.principal_point[0], data_pv.payload.principal_point[1], 1, 0], [0, 0, 0, 1]], dtype=np.float32) 
-                #pv_extrinsics = np.eye(4, 4, dtype=np.float32)
-                #R = np.array([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]], dtype=pv_extrinsics.dtype)
-                #pv_intrinsics[0, 0] = -pv_intrinsics[0, 0]
-                #pv_extrinsics = pv_extrinsics @ R
-                #pv_intrinsics, pv_extrinsics = (pv_intrinsics, pv_extrinsics)
-                #world_to_image = np.linalg.inv(data_pv.pose) @ pv_extrinsics @ pv_intrinsics       
+            # Berechnung des combined_point
+            local_combined_ray = np.vstack((eet.combined_ray.origin, eet.combined_ray.direction)).reshape((-1, 6))
+            #print(f"local_combined_ray: {local_combined_ray}")
 
-                # Berechnung des combined_point
-                local_combined_ray = np.vstack((eet.combined_ray.origin, eet.combined_ray.direction)).reshape((-1, 6))                                                                                     
-                combined_ray = np.hstack((local_combined_ray[:, 0:3] @ data_eet.pose[:3, :3] + data_eet.pose[3, :3].reshape(([1] * (len(local_combined_ray[:, 0:3].shape) - 1)).append(3)), local_combined_ray[:, 3:6] @ data_eet.pose[:3, :3]))
-                surfaces = sm_manager._get_surfaces()
-                n = len(surfaces)
-                distances = np.ones(combined_ray.shape[0:-1] + (n if (n > 0) else 1,)) * np.inf
-                for index, entry in enumerate(surfaces):
-                    distances[..., index] = entry.rcs.cast_rays(combined_ray)['t_hit'].numpy()
-                distances = np.min(distances, axis=-1)
-                d = distances
-                if (np.isfinite(d)):
-                    combined_point = (combined_ray[:, 0:3] + d * combined_ray[:, 3:6]).reshape((-1, 3)).flatten().tolist()
-                    #print("reingegeben", combined_point)
-                    # Der combined_point an die Queue übergeben, damit andere Threads darauf zugreifen können
-                    shared_queue.put(combined_point)
-                    
-                #time.sleep(0.01)  # Verhindert 100% CPU-Auslastung
+            combined_ray = np.hstack((
+                local_combined_ray[:, 0:3] @ data_eet.pose[:3, :3] + 
+                data_eet.pose[3, :3].reshape(([1] * (len(local_combined_ray[:, 0:3].shape) - 1)).append(3)), 
+                local_combined_ray[:, 3:6] @ data_eet.pose[:3, :3]
+            ))
+            #print(f"combined_ray: {combined_ray}")
 
-                # FPS Berechnung: Zeit seit dem letzten Datenpaket
-                current_time = time.time()
-                delta_time = current_time - last_time  # Zeitdifferenz seit letztem Frame
-                last_time = current_time  # Zeitstempel für das nächste Frame setzen
+            surfaces = sm_manager._get_surfaces()
+            #print(f"Anzahl der Oberflächen: {len(surfaces)}")
 
-                if delta_time > 0:  # Verhindert Division durch Null
-                    fps = 1.0 / delta_time
-                    print(f"FPS: {fps:.2f}")  # FPS-Ausgabe
+            n = len(surfaces)
+            distances = np.ones(combined_ray.shape[0:-1] + (n if (n > 0) else 1,)) * np.inf
 
-        except:
-            ...
+            for index, entry in enumerate(surfaces):
+                distances[..., index] = entry.rcs.cast_rays(combined_ray)['t_hit'].numpy()
+            #print(f"Distanzen berechnet: {distances}")
+
+            distances = np.min(distances, axis=-1)
+            d = distances
+            #print(f"Minimale Distanz: {d}")
+
+            if np.isfinite(d).all():
+                combined_point = (combined_ray[:, 0:3] + d * combined_ray[:, 3:6]).reshape((-1, 3)).flatten().tolist()
+                #print(f"Berechneter combined_point: {combined_point}")
+
+                # Den combined_point an die Queue übergeben, damit andere Threads darauf zugreifen können
+                shared_queue.put(combined_point)
+                #print("combined_point in shared_queue gespeichert.")
+
+            # FPS Berechnung
+            current_time = time.time()
+            delta_time = current_time - last_time  # Zeitdifferenz seit letztem Frame
+            last_time = current_time  # Zeitstempel für das nächste Frame setzen
+
+            if delta_time > 0:  # Verhindert Division durch Null
+                fps = 1.0 / delta_time
+                print(f"FPS: {fps:.2f}")  # FPS-Ausgabe
+
+        except Exception as e:
+            print("Ein Fehler ist aufgetreten!")
+            traceback.print_exc()  # Zeigt den kompletten Stack-Trace für genaues Debugging
+        
 
 
         #time.sleep(0.01)  # Verhindert 100% CPU-Auslastung      
+def pv_view(queue):
+    global stop_threads
+    while not stop_threads:
+        try:
+            data = queue.get()
+            image = data["image"]
+
+            cv2.imshow('Video', image)
+            cv2.waitKey(1)
+        except:
+            ...
 
 # -------  HoloLensVisualization
 def HLV_thread(shared_queue, display_list, ipc, key, rotation, scale): 
-    cubes = []
-
-    while True:
+    global stop_threads
+    while not stop_threads:
         try:
-            if not shared_queue.empty():
-                data = shared_queue.get()
-                coord = [-x if i == 2 else x for i, x in enumerate(data)]
+            data = shared_queue.get()
+            coord = [-x if i == 2 else x for i, x in enumerate(data)]
+            #head_cube2 = o3d.geometry.TriangleMesh.create_box(0.1, 0.1, 0.1)
+            #head_cube2.paint_uniform_color([0, 1, 0])
+            # Verschiebe den Würfel an die gewünschte Position
+            #head_cube2.translate(coord)
+            #vis.add_geometry(head_cube2)
+            #cubes.append(head_cube2)
+            #coord Transform
+            display_list = hl2ss_rus.command_buffer()
+            display_list.begin_display_list()
+            display_list.set_world_transform(key, coord, rotation, scale)
+            display_list.end_display_list()
+            ipc.push(display_list)
+            results = ipc.pull(display_list)
 
-                try:
-                    #head_cube2 = o3d.geometry.TriangleMesh.create_box(0.1, 0.1, 0.1)
-                    #head_cube2.paint_uniform_color([0, 1, 0])
-                    # Verschiebe den Würfel an die gewünschte Position
-                    #head_cube2.translate(coord)
-                    #vis.add_geometry(head_cube2)
-                    #cubes.append(head_cube2)
-                    #coord Transform
-                    display_list = hl2ss_rus.command_buffer()
-                    display_list.begin_display_list()
-                    display_list.set_world_transform(key, coord, rotation, scale)
-                    display_list.end_display_list()
-                    ipc.push(display_list)
-                    results = ipc.pull(display_list)
-                except:
-                    ...
 
         except Exception as e:
             ...
@@ -266,14 +285,14 @@ def main():
     # Initial rotation in world space (x, y, z, w) as a quaternion
     rotation = [0, 0, 0, 1]
     # Initial scale in meters
-    scale = [0.2, 0.2, 0.2]
+    scale = [0.05, 0.05, 0.05]
     # Initial color
     rgba = [1, 1, 1, 1]
 
     display_list = hl2ss_rus.command_buffer()
     display_list.begin_display_list() # Begin command sequence
     display_list.remove_all() # Remove all objects that were created remotely
-    display_list.create_primitive(hl2ss_rus.PrimitiveType.Cube) # Create a cube, server will return its id
+    display_list.create_primitive(hl2ss_rus.PrimitiveType.Sphere) # Create a cube, server will return its id
     display_list.set_target_mode(hl2ss_rus.TargetMode.UseLast) # Set server to use the last created object as target, this avoids waiting for the id of the cube
     display_list.set_world_transform(key, position, rotation, scale) # Set the world transform of the cube
     display_list.set_color(key, rgba) # Set the color of the cube
@@ -299,10 +318,15 @@ def main():
     cube_thread = threading.Thread(target=HLV_thread, args=(shared_queue, display_list, ipc, key, rotation, scale))
     cube_thread.start()
 
+    pv_thread = threading.Thread(target=pv_view, args=(queue,))
+    pv_thread.start()
     def on_keyboard_interrupt():
         print("Shutting down gracefully...")
+        global stop_threads
         stop_threads = True
-        
+        mesh_thread.join(timeout=1)
+        cube_thread.join(timeout=1)
+        pv_thread.join(timeout=1)
         # Stop data collection first
         if fetch_process.is_alive():
             fetch_process.terminate()
@@ -337,7 +361,7 @@ def main():
     try:
         # Instead of just joining, implement a proper wait loop that can be interrupted
         while not stop_threads:
-            time.sleep(0.1)  # Small sleep to avoid CPU hogging
+            time.sleep(0.01)  # Small sleep to avoid CPU hogging
     except KeyboardInterrupt:
         on_keyboard_interrupt()
         sys.exit()

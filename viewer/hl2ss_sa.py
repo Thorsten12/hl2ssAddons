@@ -1,6 +1,9 @@
 
 import multiprocessing as mp
 import threading
+import time
+import traceback
+import uuid
 import numpy as np
 import open3d as o3d
 import hl2ss
@@ -50,22 +53,21 @@ class _sm_manager_entry:
 class sm_manager:
     def __init__(self, host, triangles_per_cubic_meter, threads):
         self._tpcm = triangles_per_cubic_meter
-        self._threads = threads
         self._vpf = hl2ss.SM_VertexPositionFormat.R16G16B16A16IntNormalized
         self._tif = hl2ss.SM_TriangleIndexFormat.R16UInt
         self._vnf = hl2ss.SM_VertexNormalFormat.R8G8B8A8IntNormalized
-        self._normals = True
-        self._bounds = False
         self._ipc = hl2ss_lnm.ipc_sm(host, hl2ss.IPCPort.SPATIAL_MAPPING)
         self._surfaces = {}
         self._volumes = None
 
     def open(self):
         self._ipc.open()
-        self._ipc.create_observer()
 
     def set_volumes(self, volumes):
         self._volumes = volumes
+        
+    def set_surfaces(self, surfaces):
+        self._surfaces = surfaces
 
     def _load_updated_surfaces(self):
         self._surfaces = self._updated_surfaces
@@ -90,14 +92,14 @@ class sm_manager:
                 if (surface_info.update_time <= previous_entry.update_time):
                     self._updated_surfaces[surface_info.id] = previous_entry
                     continue
-            tasks.add_task(id, self._tpcm, self._vpf, self._tif, self._vnf, self._normals, self._bounds)
+            tasks.add_task(id, self._tpcm, self._vpf, self._tif, self._vnf)
             updated_surfaces.append(surface_info)
 
         count = len(updated_surfaces)
         if (count <= 0):
             return
 
-        for index, mesh in self._ipc.get_meshes(tasks, self._threads).items():
+        for index, mesh in self._ipc.get_meshes(tasks).items():
             if (mesh is None):
                 continue
             mesh.unpack(self._vpf, self._tif, self._vnf)
@@ -119,12 +121,25 @@ class sm_manager:
 
     def cast_rays(self, rays):
         surfaces = self._get_surfaces()
+        print(surfaces, type(surfaces))
         n = len(surfaces)
         distances = np.ones(rays.shape[0:-1] + (n if (n > 0) else 1,)) * np.inf
+        
         for index, entry in enumerate(surfaces):
-            distances[..., index] = entry.rcs.cast_rays(rays)['t_hit'].numpy()
+            if hasattr(entry, 'rcs') and entry.rcs is not None:
+                if isinstance(entry.rcs, bytes):
+                    print(f"Warning: entry.rcs is a bytes object for index {index}")
+                    # Skip this surface or try to convert bytes to proper format
+                    continue
+                try:
+                    distances[..., index] = entry.rcs.cast_rays(rays)['t_hit'].numpy()
+                except Exception as e:
+                    print(f"Error casting rays on surface {index}: {e}")
+                    traceback.print_exc()
+        
         distances = np.min(distances, axis=-1)
         return distances
+
 
 
 class sm_mt_manager(sm_manager):
