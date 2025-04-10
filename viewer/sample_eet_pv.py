@@ -17,11 +17,13 @@ import hl2ss_utilities
 import hl2ss_mp
 import hl2ss_3dcv
 import hl2ss_sa
+import Config
 
+import time
 # Settings --------------------------------------------------------------------
 
 # HoloLens 2 address
-host = "192.168.137.140"
+host = Config.HOST
 
 # Camera parameters
 # See etc/hl2_capture_formats.txt for a list of supported formats
@@ -48,6 +50,8 @@ mesh_threads = 2
 sphere_center = [0, 0, 0]
 sphere_radius = 5
 
+frame_count = 0
+elapsed_time_total = 0.0
 #------------------------------------------------------------------------------
 
 if __name__ == '__main__':
@@ -94,6 +98,8 @@ if __name__ == '__main__':
 
     # Main Loop ---------------------------------------------------------------
     while (enable):
+        
+        start_time = time.time()
         # Download observed surfaces ------------------------------------------
         sm_manager.get_observed_surfaces()
 
@@ -150,6 +156,21 @@ if __name__ == '__main__':
                 combined_point = hl2ss_utilities.si_ray_to_point(combined_ray, d)
                 combined_image_point = hl2ss_3dcv.project(combined_point, world_to_image)
                 hl2ss_utilities.draw_points(image, combined_image_point.astype(np.int32), radius, combined_color, thickness)
+        # Calculate FPS for this frame ---------------------------------------
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        frame_count += 1
+        elapsed_time_total += elapsed_time
+    
+        # Calculate average FPS over total time
+        if elapsed_time_total > 0:
+            avg_fps = frame_count / elapsed_time_total
+        else:
+            avg_fps = 0
+    
+        # Display average FPS on the image ----------------------------------
+        avg_fps_text = f"Avg FPS: {avg_fps:.2f}"
+        cv2.putText(image, avg_fps_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
         # Display frame -------------------------------------------------------            
         cv2.imshow('Video', image)

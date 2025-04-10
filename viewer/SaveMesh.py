@@ -7,9 +7,9 @@ import hl2ss
 import hl2ss_lnm
 import hl2ss_mp
 import hl2ss_sa
-
+import Config
 # Settings --------------------------------------------------------------------
-host = '192.168.137.140'  # HoloLens address
+host = Config.HOST  # HoloLens address
 buffer_size = 1  # Buffer length in seconds
 tpcm = 0.5  # Reduziert von 1 auf 0.5 Punkte pro Kubikmeter
 threads = 2  # Number of processing threads

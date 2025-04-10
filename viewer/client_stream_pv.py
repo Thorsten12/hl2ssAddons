@@ -18,7 +18,7 @@ import hl2ss_lnm
 # Settings --------------------------------------------------------------------
 
 # HoloLens address
-host = "192.168.137.49"
+host = "192.168.1.7"
 
 # Operating mode
 # 0: video
@@ -36,8 +36,8 @@ shared = False
 
 # Camera parameters
 # Ignored in shared mode
-width     = 640
-height    = 360
+width     = 1920
+height    = 1080
 framerate = 30
 
 # Framerate denominator (must be > 0)
@@ -104,10 +104,10 @@ else:
         print(f'White Balance: {data.payload.white_balance}')
         print(f'ISO Gains: {data.payload.iso_gains}')
         print(f'White Balance Gains: {data.payload.white_balance_gains}')
+        print(f'Resolution {data.payload.resolution}')
         print(f'Pose')
         print(data.pose)
 
-        #print(data.payload.image)
         cv2.imshow('Video', data.payload.image)
         cv2.waitKey(1)
 

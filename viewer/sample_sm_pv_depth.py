@@ -19,7 +19,7 @@ import hl2ss_utilities
 # Settings --------------------------------------------------------------------
 
 # HoloLens address
-host = '192.168.137.179'
+host = '192.168.1.7'
 
 # Calibration folder (must exist but can be empty)
 calibration_path = '../calibration'
@@ -59,8 +59,8 @@ if __name__ == "__main__":
     # Fix PV focus
     rc_client = hl2ss_lnm.ipc_rc(host, hl2ss.IPCPort.REMOTE_CONFIGURATION)
     rc_client.open()
-    rc_client.wait_for_pv_subsystem(True)
-    rc_client.set_pv_focus(hl2ss.PV_FocusMode.Manual, hl2ss.PV_AutoFocusRange.Normal, hl2ss.PV_ManualFocusDistance.Infinity, pv_focus, hl2ss.PV_DriverFallback.Disable)
+    rc_client.pv_wait_for_subsystem(True)
+    rc_client.pv_set_focus(hl2ss.PV_FocusMode.Manual, hl2ss.PV_AutoFocusRange.Normal, hl2ss.PV_ManualFocusDistance.Infinity, pv_focus, hl2ss.PV_DriverFallback.Disable)
     rc_client.close()
 
     # Get calibration (focus is fixed so intrinsics don't change between frames)

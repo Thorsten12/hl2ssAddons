@@ -121,7 +121,7 @@ class sm_manager:
 
     def cast_rays(self, rays):
         surfaces = self._get_surfaces()
-        print(surfaces, type(surfaces))
+        #print(surfaces, type(surfaces))
         n = len(surfaces)
         distances = np.ones(rays.shape[0:-1] + (n if (n > 0) else 1,)) * np.inf
         
@@ -135,7 +135,7 @@ class sm_manager:
                     distances[..., index] = entry.rcs.cast_rays(rays)['t_hit'].numpy()
                 except Exception as e:
                     print(f"Error casting rays on surface {index}: {e}")
-                    traceback.print_exc()
+                    #traceback.print_exc()
         
         distances = np.min(distances, axis=-1)
         return distances

@@ -2,7 +2,7 @@
 # Recording example. Data is recorded to binary files. See simple player for
 # how to extract recorded data.
 # Press space to start recording.
-# Press stop to stop recording.
+# Press esc to stop recording.
 #------------------------------------------------------------------------------
 
 from pynput import keyboard
@@ -27,9 +27,9 @@ unpack = True
 
 # Ports to record
 ports = [
-    #hl2ss.StreamPort.RM_VLC_LEFTFRONT,
+    hl2ss.StreamPort.RM_VLC_LEFTFRONT,
     #hl2ss.StreamPort.RM_VLC_LEFTLEFT,
-    #hl2ss.StreamPort.RM_VLC_RIGHTFRONT,
+    hl2ss.StreamPort.RM_VLC_RIGHTFRONT,
     #hl2ss.StreamPort.RM_VLC_RIGHTRIGHT,
     #hl2ss.StreamPort.RM_DEPTH_AHAT,
     #hl2ss.StreamPort.RM_DEPTH_LONGTHROW,

@@ -10,7 +10,7 @@ import hl2ss_lnm
 #------------------------------------------------------------------------------
 
 # HoloLens address
-host = '192.168.137.174'
+host = '192.168.1.7'
 
 # Text to send
 text = 'Hello from python!'
