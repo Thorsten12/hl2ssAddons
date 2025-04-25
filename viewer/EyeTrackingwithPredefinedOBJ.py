@@ -36,10 +36,12 @@ import time
 
 import SM_convert
 
+import Config
+
 # Settings --------------------------------------------------------------------
 
 # HoloLens 2 address
-host = "192.168.137.140"
+host = Config.HOST
 # Camera parameters
 # See etc/hl2_capture_formats.txt for a list of supported formats
 pv_width     = 760
@@ -311,6 +313,7 @@ def main():
 
     # Set Surfaces
     dummy_dict = SM_convert.sm_mesh_to_sm_manager("C:/Users/admin/Desktop/hl2ss/viewer/meshes/spatial_mapping_mesh_1.ply")
+    
     sm_manager.set_surfaces(dummy_dict)
     
     # Start PV and EET streams ------------------------------------------------

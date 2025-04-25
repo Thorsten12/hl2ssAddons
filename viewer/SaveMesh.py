@@ -8,6 +8,7 @@ import hl2ss_lnm
 import hl2ss_mp
 import hl2ss_sa
 import Config
+
 # Settings --------------------------------------------------------------------
 host = Config.HOST  # HoloLens address
 buffer_size = 1  # Buffer length in seconds

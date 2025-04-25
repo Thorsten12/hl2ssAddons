@@ -1,474 +1,348 @@
-#------------------------------------------------------------------------------
-# This script receives video frames and extended eye tracking data from the 
-# HoloLens. The received left, right, and combined gaze pointers are projected
-# onto the video frame.
-# Press esc to stop.
-#------------------------------------------------------------------------------
-
-from pynput import keyboard
-
-import multiprocessing as mp
+import pygame
+from pygame.locals import *
+from OpenGL.GL import *
+from OpenGL.GLU import *
 import numpy as np
-import cv2
-import hl2ss_imshow
-import hl2ss
-import hl2ss_lnm
-import hl2ss_utilities
-import hl2ss_mp
-import hl2ss_3dcv
-import hl2ss_sa
-import csv
-import os
-import datetime
-import threading
+import math
+import trimesh
 
 
-# Settings --------------------------------------------------------------------
+VERTEX_SHADER = """
+#version 120
+varying vec3 normal;
+varying vec3 frag_pos;
 
-# HoloLens 2 address
-host = "192.168.137.195"
-# Camera parameters
-# See etc/hl2_capture_formats.txt for a list of supported formats
-pv_width     = 760
-pv_height    = 428
-pv_framerate = 30
+void main() {
+    frag_pos = vec3(gl_ModelViewMatrix * gl_Vertex);
+    normal = gl_NormalMatrix * gl_Normal;
+    gl_Position = ftransform();
+}
+"""
 
-# EET parameters
-eet_fps = 30 # 30, 60, 90
+FRAGMENT_SHADER = """
+#version 120
+varying vec3 normal;
+varying vec3 frag_pos;
 
-# Marker properties
-radius = 5
-combined_color = (255, 0, 255)
-left_color     = (  0, 0, 255)
-right_color    = (255, 0,   0)
-thickness = -1
+void main() {
+    // Lichtquelle, die statisch von oben kommt
+    vec3 light_pos = vec3(5.0, 10.0, 5.0);  // Position des Lichts
+    vec3 light_color = vec3(1.0, 1.0, 1.0); // Weißes Licht
 
-# Buffer length in seconds
-buffer_length = 5
+    // Normale des Fragments (Oberflächenrichtung)
+    vec3 norm = normalize(normal);
 
-# Spatial Mapping manager settings
-triangles_per_cubic_meter = 1000
-mesh_threads = 2
-sphere_center = [0, 0, 0]
-sphere_radius = 5
+    // Richtung des Lichts relativ zum Fragment
+    vec3 light_dir = normalize(light_pos - frag_pos);
 
-#------------------------------------------------------------------------------
+    // Berechnung des Diffuse Anteils (abhängig von der Oberfläche)
+    float diff = max(dot(norm, light_dir), 0.0);
+    vec3 diffuse = diff * light_color;
 
-if __name__ == '__main__':
-    # Keyboard events ---------------------------------------------------------
-    enable = True
+    // Berechnung der spekularen Highlights (Reflexion des Lichts)
+    vec3 view_dir = normalize(-frag_pos);  // Blickrichtung von der Kamera
+    vec3 reflect_dir = reflect(-light_dir, norm);  // Reflektierte Lichtquelle
+    float spec = pow(max(dot(view_dir, reflect_dir), 0.0), 32.0); // Spiegelungseffekt
+    vec3 specular = 0.3 * spec * light_color;  // Intensität der Reflexion
 
-    def on_press(key):
-        global enable
-        enable = key != keyboard.Key.esc
-        return enable
+    // Berechnung der Ambient (Umgebungslicht) Komponente
+    vec3 ambient = 0.2 * light_color;
 
-    listener = keyboard.Listener(on_press=on_press)
-    listener.start()
+    // Endfarbe berechnen durch die Summierung der verschiedenen Lichtkomponenten
+    vec3 color = ambient + diffuse + specular;
 
-    # Start PV Subsystem ------------------------------------------------------
-    hl2ss_lnm.start_subsystem_pv(host, hl2ss.StreamPort.PERSONAL_VIDEO)
+    // Optional: Tiefe basierte Helligkeit (für realistische Schattierung je nach Abstand)
+    float distance = length(frag_pos);
+    float brightness = clamp(1.5 - (distance / 55.0), 0.0, 1.0);  // Lichtverlauf je nach Entfernung
+    color *= brightness;
 
-    # Start Spatial Mapping data manager --------------------------------------
-    # Set region of 3D space to sample
-    volumes = hl2ss.sm_bounding_volume()
-    volumes.add_sphere(sphere_center, sphere_radius)
+    // Das Endergebnis: Die endgültige Fragmentfarbe (RGB-Wert)
+    gl_FragColor = vec4(color, 1.0);
+}
 
-    print("volumes")
-    # Download observed surfaces
-    sm_manager = hl2ss_sa.sm_manager(host, triangles_per_cubic_meter, mesh_threads)
-    print("2")
-    sm_manager.open()
-    print("3")
-    sm_manager.set_volumes(volumes)
-    print("4")  
-    sm_manager.get_observed_surfaces()
-    print("5")
-    
-    print("surfaces")
-    # Start PV and EET streams ------------------------------------------------
-    producer = hl2ss_mp.producer()
-    producer.configure(hl2ss.StreamPort.PERSONAL_VIDEO, hl2ss_lnm.rx_pv(host, hl2ss.StreamPort.PERSONAL_VIDEO, width=pv_width, height=pv_height, framerate=pv_framerate))
-    producer.configure(hl2ss.StreamPort.RM_DEPTH_AHAT, hl2ss_lnm.rx_rm_depth_ahat(host, hl2ss.StreamPort.RM_DEPTH_AHAT))
-    producer.configure(hl2ss.StreamPort.SPATIAL_INPUT, hl2ss_lnm.rx_si(host, hl2ss.StreamPort.SPATIAL_INPUT))
-    producer.configure(hl2ss.StreamPort.EXTENDED_EYE_TRACKER, hl2ss_lnm.rx_eet(host, hl2ss.StreamPort.EXTENDED_EYE_TRACKER, fps=eet_fps))
-    producer.initialize(hl2ss.StreamPort.PERSONAL_VIDEO, pv_framerate * buffer_length)
-    producer.initialize(hl2ss.StreamPort.RM_DEPTH_AHAT, hl2ss.Parameters_RM_DEPTH_AHAT.FPS * 5)
-    producer.initialize(hl2ss.StreamPort.SPATIAL_INPUT, hl2ss.Parameters_SI.SAMPLE_RATE * buffer_length)
-    producer.initialize(hl2ss.StreamPort.EXTENDED_EYE_TRACKER, hl2ss.Parameters_SI.SAMPLE_RATE * buffer_length)
-    producer.start(hl2ss.StreamPort.PERSONAL_VIDEO)
-    producer.start(hl2ss.StreamPort.RM_DEPTH_AHAT)
-    producer.start(hl2ss.StreamPort.EXTENDED_EYE_TRACKER)
-    producer.start(hl2ss.StreamPort.SPATIAL_INPUT)
+"""
+# Fenster-Einstellungen
+WIDTH, HEIGHT = 800, 600
+FOV = 45
+NEAR_PLANE = 0.1
+FAR_PLANE = 100.0
 
-    consumer = hl2ss_mp.consumer()
-    manager = mp.Manager()
-    sink_pv = consumer.create_sink(producer, hl2ss.StreamPort.PERSONAL_VIDEO, manager, ...)
-    sink_ahat = consumer.create_sink(producer, hl2ss.StreamPort.RM_DEPTH_AHAT, manager, None)
-    sink_eet = consumer.create_sink(producer, hl2ss.StreamPort.EXTENDED_EYE_TRACKER, manager, None)
-    sink_si = consumer.create_sink(producer, hl2ss.StreamPort.SPATIAL_INPUT, manager, None)
-    sink_pv.get_attach_response()
-    sink_ahat.get_attach_response()
-    sink_eet.get_attach_response()
-    sink_si.get_attach_response()
+# Kamera
+camera_pos = [0, 3, 8]
+camera_rot = [30, 0, 0]
+MOVE_SPEED = 0.2
+ROTATE_SPEED = 2.0
+mouse_sensitivity = 0.2
+last_mouse_pos = None
+mouse_dragging = False
 
-    def get_unique_folder(base_name):
-        index = 0
-        while True:
-            folder_name = f"{base_name}{index}"
-            if not os.path.exists(folder_name):
-                os.makedirs(folder_name)
-                os.makedirs(os.path.join(folder_name, 'images'))
-                os.makedirs(os.path.join(folder_name, 'depth'))
-                os.makedirs(os.path.join(folder_name, 'AB'))
+# Würfel
+cube_size = 0.5
+cube_size_min = 0.1
+cube_size_max = 2.0
+cube_size_step = 0.1
+cubes = []
+def compile_shader(source, shader_type):
+    shader = glCreateShader(shader_type)
+    glShaderSource(shader, source)
+    glCompileShader(shader)
+    # Check for errors
+    result = glGetShaderiv(shader, GL_COMPILE_STATUS)
+    if not result:
+        raise RuntimeError(glGetShaderInfoLog(shader))
+    return shader
 
-                return folder_name
-            index += 1
+def create_shader_program():
+    vertex = compile_shader(VERTEX_SHADER, GL_VERTEX_SHADER)
+    fragment = compile_shader(FRAGMENT_SHADER, GL_FRAGMENT_SHADER)
+    program = glCreateProgram()
+    glAttachShader(program, vertex)
+    glAttachShader(program, fragment)
+    glLinkProgram(program)
+    # Check for linking errors
+    result = glGetProgramiv(program, GL_LINK_STATUS)
+    if not result:
+        raise RuntimeError(glGetProgramInfoLog(program))
+    return program
+def create_display_list_from_ply(path):
+    mesh = trimesh.load(path)
+    vertices = mesh.vertices
+    faces = mesh.faces
 
+    display_list = glGenLists(1)
+    glNewList(display_list, GL_COMPILE)
+    glBegin(GL_TRIANGLES)
+    for face in faces:
+        for idx in face:
+            glVertex3fv(vertices[idx])
+    glEnd()
+    glEndList()
+    return display_list
 
-    data_folder = get_unique_folder("data")
-    csv_filename = os.path.join(data_folder, 'data.csv')
-    image_folder = os.path.join(data_folder, 'images')
-    depth_folder = os.path.join(data_folder, 'depth')
-    ab_folder = os.path.join(data_folder, 'AB')
+def draw_ply_model_display_list(shader_program, display_list_id, position=(0,0,0), scale=10.0, color=(1.0, 0.8, 0.2)):
+    glPushMatrix()
+    glTranslatef(*position)
+    glScalef(scale, scale, scale)  # <-- hier wird skaliert
+    glUseProgram(shader_program)
+    glColor3fv(color)
+    glCallList(display_list_id)
+    glPopMatrix()
 
+def init():
+    glEnable(GL_DEPTH_TEST)
+    glEnable(GL_LIGHTING)
+    glEnable(GL_LIGHT0)
+    glEnable(GL_COLOR_MATERIAL)
+    glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE)
+    glLight(GL_LIGHT0, GL_POSITION, (5, 10, 5, 1))
+    glLight(GL_LIGHT0, GL_AMBIENT, (0.2, 0.2, 0.2, 1))
+    glLight(GL_LIGHT0, GL_DIFFUSE, (0.8, 0.8, 0.8, 1))
 
-    print(f"Writing data to: {csv_filename}")
-    print(f"Saving images to: {image_folder}")
-    print(f"Saving Depth to: {depth_folder}")
-    print(f"Saving AB to: {ab_folder}")
+def set_projection():
+    glMatrixMode(GL_PROJECTION)
+    glLoadIdentity()
+    gluPerspective(FOV, WIDTH/HEIGHT, NEAR_PLANE, FAR_PLANE)
 
-    def save_image(image_data, filename):
-        cv2.imwrite(filename, image_data)
+def set_camera():
+    glMatrixMode(GL_MODELVIEW)
+    glLoadIdentity()
+    glRotatef(camera_rot[0], 1, 0, 0)
+    glRotatef(camera_rot[1], 0, 1, 0)
+    glRotatef(camera_rot[2], 0, 0, 1)
+    glTranslatef(-camera_pos[0], -camera_pos[1], -camera_pos[2])
 
-    def save_depth(arr, filename):
-        np.save(filename, arr, allow_pickle=True, fix_imports=True)
+def draw_plane():
+    glColor3f(0.5, 0.5, 0.5)
+    glBegin(GL_QUADS)
+    glNormal3f(0, 1, 0)
+    size = 20
+    glVertex3f(-size, 0, -size)
+    glVertex3f(-size, 0, size)
+    glVertex3f(size, 0, size)
+    glVertex3f(size, 0, -size)
+    glEnd()
 
-    left_image_point = []
-    right_image_point = []
-    combined_image_point =[]
+    glColor3f(0.3, 0.3, 0.3)
+    glBegin(GL_LINES)
+    for i in range(-size, size + 1, 2):
+        glVertex3f(i, 0.01, -size)
+        glVertex3f(i, 0.01, size)
+        glVertex3f(-size, 0.01, i)
+        glVertex3f(size, 0.01, i)
+    glEnd()
 
-    null_arr = [-1,-1]
+def draw_cube(position, size=0.5, color=(0.0, 0.6, 1.0)):
+    glPushMatrix()
+    glTranslatef(position[0], position[1], position[2])
+    glColor3fv(color)
+    s = size
+    vertices = [
+        [s, s, -s], [s, -s, -s], [-s, -s, -s], [-s, s, -s],
+        [s, s, s], [s, -s, s], [-s, -s, s], [-s, s, s]
+    ]
+    faces = [
+        [0, 1, 2, 3], [4, 5, 6, 7], [0, 4, 7, 3],
+        [1, 5, 6, 2], [0, 4, 5, 1], [3, 7, 6, 2]
+    ]
+    normals = [
+        [0, 0, -1], [0, 0, 1], [0, 1, 0],
+        [0, -1, 0], [1, 0, 0], [-1, 0, 0]
+    ]
+    glBegin(GL_QUADS)
+    for i, face in enumerate(faces):
+        glNormal3fv(normals[i])
+        for v in face:
+            glVertex3fv(vertices[v])
+    glEnd()
+    glPopMatrix()
 
-    with open(csv_filename, 'w', newline='') as csvfile:
-        csv_writer = csv.writer(csvfile)
-        csv_writer.writerow([
-            'Timestamp',
-            'LeftImagePoint'
-            'RightImagePoint',
-            'CombinedImagePoint',
-            'Position',
-            'Forward',
-            'Up',
-            'image_filename'
+def create_ray_from_mouse(mouse_pos):
+    viewport = glGetIntegerv(GL_VIEWPORT)
+    projection_matrix = glGetDoublev(GL_PROJECTION_MATRIX)
+    modelview_matrix = glGetDoublev(GL_MODELVIEW_MATRIX)
+    mouse_x, mouse_y = mouse_pos
+    win_y = viewport[3] - mouse_y - 1
+    near_point = gluUnProject(mouse_x, win_y, 0.0, modelview_matrix, projection_matrix, viewport)
+    far_point = gluUnProject(mouse_x, win_y, 1.0, modelview_matrix, projection_matrix, viewport)
+    ray_dir = np.array(far_point) - np.array(near_point)
+    ray_dir /= np.linalg.norm(ray_dir)
+    return np.array(near_point), ray_dir
+
+def intersect_ray_plane(ray_origin, ray_dir, plane_pos, plane_normal):
+    plane_normal = plane_normal / np.linalg.norm(plane_normal)
+    denom = np.dot(ray_dir, plane_normal)
+    if abs(denom) < 1e-6:
+        return None
+    d = np.dot(plane_pos - ray_origin, plane_normal) / denom
+    if d < 0:
+        return None
+    return ray_origin + ray_dir * d
+
+def generate_random_color():
+    return (
+        np.random.uniform(0.2, 0.8),
+        np.random.uniform(0.2, 0.8),
+        np.random.uniform(0.2, 0.8)
+    )
+
+def draw_crosshair():
+    glMatrixMode(GL_PROJECTION)
+    glPushMatrix()
+    glLoadIdentity()
+    glOrtho(0, WIDTH, 0, HEIGHT, -1, 1)
+    glMatrixMode(GL_MODELVIEW)
+    glPushMatrix()
+    glLoadIdentity()
+
+    glDisable(GL_DEPTH_TEST)
+    glLineWidth(2)
+    glColor3f(1, 1, 1)
+    glBegin(GL_LINES)
+    glVertex2f(WIDTH/2 - 10, HEIGHT/2)
+    glVertex2f(WIDTH/2 + 10, HEIGHT/2)
+    glVertex2f(WIDTH/2, HEIGHT/2 - 10)
+    glVertex2f(WIDTH/2, HEIGHT/2 + 10)
+    glEnd()
+    glEnable(GL_DEPTH_TEST)
+
+    glMatrixMode(GL_PROJECTION)
+    glPopMatrix()
+    glMatrixMode(GL_MODELVIEW)
+    glPopMatrix()
+
+def rotation_matrix_2d(theta):
+    return np.array([
+        [np.cos(theta), -np.sin(theta)],
+        [np.sin(theta), np.cos(theta)]
+    ])
+
+def get_2d_vector_from_angle(angle_deg):
+    rad = np.radians(angle_deg)
+    return np.array([np.cos(rad), np.sin(rad)])
+
+def main():
+    global camera_pos, camera_rot, cube_size, last_mouse_pos, mouse_dragging
+    pygame.init()
+    pygame.display.set_mode((WIDTH, HEIGHT), DOUBLEBUF | OPENGL)
+    pygame.display.set_caption("Optimiertes 3D-Modell mit Display List")
+    init()
+    set_projection()
+    shader_program = create_shader_program()
+
+    # Optimierter PLY-Loader
+    model_display_list = create_display_list_from_ply("C:/Users/admin/Desktop/hl2ss/viewer/spatial_mapping_mesh_simplified_7.ply")
+
+    clock = pygame.time.Clock()
+    running = True
+    while running:
+        for event in pygame.event.get():
+            if event.type == QUIT: running = False
+            elif event.type == MOUSEBUTTONDOWN:
+                if event.button == 1:
+                    ray_origin, ray_dir = create_ray_from_mouse(event.pos)
+                    intersection = intersect_ray_plane(ray_origin, ray_dir, np.array([0,0,0]), np.array([0,1,0]))
+                    if intersection is not None:
+                        cube_pos = [intersection[0], intersection[1] + cube_size, intersection[2]]
+                        cubes.append([cube_pos, cube_size, generate_random_color()])
+                elif event.button == 3:
+                    mouse_dragging = True
+                    last_mouse_pos = event.pos
+            elif event.type == MOUSEBUTTONUP:
+                if event.button == 3:
+                    mouse_dragging = False
+            elif event.type == MOUSEMOTION and mouse_dragging:
+                dx, dy = event.pos[0] - last_mouse_pos[0], event.pos[1] - last_mouse_pos[1]
+                camera_rot[1] -= dx * mouse_sensitivity
+                camera_rot[0] -= dy * mouse_sensitivity
+                camera_rot[0] = max(-90, min(90, camera_rot[0]))
+                last_mouse_pos = event.pos
+            elif event.type == KEYDOWN:
+                if event.key == K_q:
+                    cube_size = max(cube_size_min, cube_size - cube_size_step)
+                elif event.key == K_e:
+                    cube_size = min(cube_size_max, cube_size + cube_size_step)
+                elif event.key == K_ESCAPE:
+                    running = False
+
+        keys = pygame.key.get_pressed()
+        yaw_rad = math.radians(camera_rot[1])
+        pitch_rad = math.radians(camera_rot[0])
+        look_dir = np.array([
+            -math.sin(yaw_rad) * math.cos(pitch_rad),
+            math.sin(pitch_rad),
+            -math.cos(yaw_rad) * math.cos(pitch_rad)
         ])
+        look_dir /= np.linalg.norm(look_dir)
+        right_dir = np.cross(look_dir, [0,1,0])
+        right_dir /= np.linalg.norm(right_dir)
+        up_dir = np.array([0,1,0])
+        move_dir = np.array([0.0, 0.0, 0.0])
 
-        # Main Loop ---------------------------------------------------------------
-        while (enable):
-            # Download observed surfaces ------------------------------------------
-            sm_manager.get_observed_surfaces()
+        if keys[K_w]: move_dir += look_dir * [-1, 0, 1]
+        if keys[K_s]: move_dir -= look_dir * [-1, 0, 1]
+        if keys[K_d]:
+            temp = np.dot(rotation_matrix_2d(0), get_2d_vector_from_angle(camera_rot[1]))
+            move_dir += [temp[0], 0, temp[1]]
+        if keys[K_a]:
+            temp = np.dot(rotation_matrix_2d(0), get_2d_vector_from_angle(camera_rot[1]))
+            move_dir -= [temp[0], 0, temp[1]]
+        if keys[K_SPACE]: move_dir += up_dir
+        if keys[K_LSHIFT]: move_dir -= up_dir
+        if np.linalg.norm(move_dir) > 0:
+            move_dir /= np.linalg.norm(move_dir)
+            camera_pos += move_dir * MOVE_SPEED
 
-            # Wait for PV frame ---------------------------------------------------
-            sink_pv.acquire()
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        set_camera()
+        #draw_plane()
+        for cube in cubes:
+            draw_cube(cube[0], cube[1], cube[2])
+        draw_ply_model_display_list(shader_program, model_display_list, position=(0, 0.01, 0))
+        draw_crosshair()
+        pygame.display.flip()
+        clock.tick(60)
 
-            # Get PV frame and nearest (in time) EET frame ------------------------
+    pygame.quit()
 
-            _, data_ahat = sink_ahat.get_most_recent_frame()
-            if ((data_ahat is None) or (not hl2ss.is_valid_pose(data_ahat.pose))):
-                    continue
-
-            _, data_pv = sink_pv.get_nearest(data_ahat.timestamp)
-            if ((data_pv is None) or (not hl2ss.is_valid_pose(data_pv.pose))):
-                continue
-
-            _, data_eet = sink_eet.get_nearest(data_ahat.timestamp)
-            if ((data_eet is None) or (not hl2ss.is_valid_pose(data_eet.pose))):
-                continue
-
-            _, data_si = sink_si.get_nearest(data_ahat.timestamp)
-            if (data_si is None):
-                continue
-            
-            image = data_pv.payload.image
-            eet = hl2ss.unpack_eet(data_eet.payload)
-            si = hl2ss.unpack_si(data_si.payload)
-            depth = data_ahat.payload.depth
-            name = datetime.datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-            image_filename = os.path.join(image_folder, f"image_{name}.jpg")
-            depth_filename = os.path.join(depth_folder, f"image_{name}.npy")
-            ab_filename = os.path.join(ab_folder, f"image_{name}.npy")
-
-            threading.Thread(target=save_image, args=(image, image_filename)).start()
-            threading.Thread(target=save_depth, args=(depth, depth_filename)).start()
-            threading.Thread(target=save_depth, args=(data_ahat.payload.ab, ab_filename)).start()
-
-            # Update PV intrinsics ------------------------------------------------
-            # PV intrinsics may change between frames due to autofocus
-            pv_intrinsics = hl2ss.create_pv_intrinsics(data_pv.payload.focal_length, data_pv.payload.principal_point)
-            pv_extrinsics = np.eye(4, 4, dtype=np.float32)
-            pv_intrinsics, pv_extrinsics = hl2ss_3dcv.pv_fix_calibration(pv_intrinsics, pv_extrinsics)
-
-            # Compute world to PV image transformation matrix ---------------------
-            world_to_image = hl2ss_3dcv.world_to_reference(data_pv.pose) @ hl2ss_3dcv.rignode_to_camera(pv_extrinsics) @ hl2ss_3dcv.camera_to_image(pv_intrinsics)
-
-            # Draw Left Gaze Pointer ----------------------------------------------
-            if (eet.left_ray_valid):
-                local_left_ray = hl2ss_utilities.si_ray_to_vector(eet.left_ray.origin, eet.left_ray.direction)
-                left_ray = hl2ss_utilities.si_ray_transform(local_left_ray, data_eet.pose)
-                d = sm_manager.cast_rays(left_ray)
-                if (np.isfinite(d)):
-                    left_point = hl2ss_utilities.si_ray_to_point(left_ray, d)
-                    left_image_point = hl2ss_3dcv.project(left_point, world_to_image)
-                    #hl2ss_utilities.draw_points(image, left_image_point.astype(np.int32), radius, left_color, thickness)
-                    
-            else:
-                left_image_point = null_arr
-
-            #print(left_image_point)            
-
-            # Draw Right Gaze Pointer ---------------------------------------------
-            if (eet.right_ray_valid):
-                local_right_ray = hl2ss_utilities.si_ray_to_vector(eet.right_ray.origin, eet.right_ray.direction)
-                right_ray = hl2ss_utilities.si_ray_transform(local_right_ray, data_eet.pose)
-                d = sm_manager.cast_rays(right_ray)
-                if (np.isfinite(d)):
-                    right_point = hl2ss_utilities.si_ray_to_point(right_ray, d)
-                    right_image_point = hl2ss_3dcv.project(right_point, world_to_image)
-                    #hl2ss_utilities.draw_points(image, right_image_point.astype(np.int32), radius, right_color, thickness)
-                   
-            else:
-                right_image_point = null_arr
-
-            #print(right_image_point)     
-
-            # Draw Combined Gaze Pointer ------------------------------------------
-            if (eet.combined_ray_valid):
-                local_combined_ray = hl2ss_utilities.si_ray_to_vector(eet.combined_ray.origin, eet.combined_ray.direction)
-                combined_ray = hl2ss_utilities.si_ray_transform(local_combined_ray, data_eet.pose)
-                d = sm_manager.cast_rays(combined_ray)
-                if (np.isfinite(d)):
-                    combined_point = hl2ss_utilities.si_ray_to_point(combined_ray, d)
-                    combined_image_point = hl2ss_3dcv.project(combined_point, world_to_image)
-                    #hl2ss_utilities.draw_points(image, combined_image_point.astype(np.int32), radius, combined_color, thickness)
-                    
-            else:
-                combined_image_point = null_arr
-
-            #print(combined_image_point)
-
-            start_x, start_z = None, None
-
-
-            if si.is_valid_head_pose():
-                head_pose = si.get_head_pose()
-                position = head_pose.position
-                forward = head_pose.forward
-                up = head_pose.up
-            else:
-                position = [0, 0, 0]
-                forward = [0, 0, 0]
-                up = [0, 0, 0]
-
-        # Startwerte für Position X und Z setzen, wenn sie noch nicht festgelegt sind
-            if start_x is None and start_z is None:
-                start_x, start_z = position[0], position[2]
-
-        # Offset der Position X und Z anwenden
-            position[0] -= start_x
-            position[2] -= start_z
-
-        
-            csv_writer.writerow([
-                datetime.datetime.now().isoformat(),
-                left_image_point,
-                right_image_point,
-                combined_image_point,
-                *position,
-                *forward,
-                *up,
-                name
-            ])            
-            """
-            image_filename = os.path.join(image_folder, f"image_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.jpg")
-            depth_filename = os.path.join(depth_folder, f"image_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.npy")
-            ab_filename = os.path.join(ab_folder, f"image_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.npy")
-    
-            threading.Thread(target=save_image, args=(data_pv.payload.image, image_filename)).start()
-            threading.Thread(target=save_depth, args=(data_ahat.payload.depth, depth_filename)).start()
-            threading.Thread(target=save_depth, args=(data_ahat.payload.ab, ab_filename)).start()    
-            # Convert points to float and handle invalid points (null_arr)
-            def safe_format_point(point):
-                if isinstance(point, (np.ndarray, list)) and len(point) == 2:
-                    return f"({point[0]:.2f},{point[1]:.2f})"
-                return "(nan,nan)"  # Handle the case for invalid or None values
-
-            start_x, start_z = None, None
-
-            # Extrahieren der Position und Orientierung aus si
-            if si.is_valid_head_pose():
-                head_pose = si.get_head_pose()
-                position = head_pose.position
-                forward = head_pose.forward
-                up = head_pose.up
-            else:
-                position = [0, 0, 0]
-                forward = [0, 0, 0]
-                up = [0, 0, 0]
-
-            # Startwerte für Position X und Z setzen, wenn sie noch nicht festgelegt sind
-            if start_x is None and start_z is None:
-                start_x, start_z = position[0], position[2]
-
-            # Offset der Position X und Z anwenden
-            position[0] -= start_x
-            position[2] -= start_z
-
-            image_filename = image_filename.replace('data2\\images\\', '')
-                
-            # Writing to the CSV
-            csv_writer.writerow([
-                datetime.datetime.now().isoformat(),
-                data_eet.timestamp,
-                eet.calibration_valid,
-                eet.combined_ray_valid,
-                *eet.combined_ray.origin,
-                *eet.combined_ray.direction,
-                eet.left_ray_valid,
-                *eet.left_ray.origin,
-                *eet.left_ray.direction,
-                eet.right_ray_valid,
-                *eet.right_ray.origin,
-                *eet.right_ray.direction,
-                eet.left_openness_valid,
-                eet.left_openness,
-                eet.right_openness_valid,
-                eet.right_openness,
-                eet.vergence_distance_valid,
-                eet.vergence_distance,
-                data_pv.timestamp,
-                *data_pv.payload.focal_length,
-                *data_pv.payload.principal_point,
-                image_filename,
-                *position,  # Position
-                *forward,   # Forward-Vektor
-                *up,         # Up-Vektor
-                data_ahat.timestamp,
-                data_ahat.payload.sensor_ticks
-        ])
-        """
-            
-            # Show the image
-            #cv2.imshow('Video', image)
-            #cv2.waitKey(1)
-            print(f"Data recorded at {datetime.datetime.now().isoformat()}")
-        # Shutdown ---------------------------------------------------------------
-    sm_manager.close()
-
-    sink_pv.detach()
-    sink_eet.detach()
-    producer.stop(hl2ss.StreamPort.PERSONAL_VIDEO)
-    producer.stop(hl2ss.StreamPort.RM_DEPTH_AHAT)
-    producer.stop(hl2ss.StreamPort.EXTENDED_EYE_TRACKER)
-    producer.stop(hl2ss.StreamPort.SPATIAL_INPUT)
-    
-
-    # Stop keyboard events ----------------------------------------------------
-    listener.join()
-    
-        
-    """
-    3d mapping
-    """   
-    import open3d as o3d
-    import hl2ss_sa
-    # Maximum triangles per cubic meter
-    tpcm = 1000
-    
-    # Data format
-    vpf = hl2ss.SM_VertexPositionFormat.R32G32B32A32Float
-    tif = hl2ss.SM_TriangleIndexFormat.R32Uint
-    vnf = hl2ss.SM_VertexNormalFormat.R32G32B32A32Float
-    
-    # Include normals
-    normals = True
-    
-    # include bounds
-    bounds = False
-    
-    # Maximum number of active threads (on the HoloLens) to compute meshes
-    threads = 2
-    
-    # Region of 3D space to sample (bounding box)
-    # All units are in meters
-    center  = [0.0, 0.0, 0.0] # Position of the box
-    extents = [8.0, 8.0, 8.0] # Dimensions of the box
-    
-    #------------------------------------------------------------------------------ 
-    
-    # Download meshes -------------------------------------------------------------
-    client_3D = hl2ss_lnm.ipc_sm(host, hl2ss.IPCPort.SPATIAL_MAPPING)
-    
-    client_3D.open()
-    
-    client_3D.create_observer()
-    
-    volumes = hl2ss.sm_bounding_volume()
-    volumes.add_box(center, extents)
-    client_3D.set_volumes(volumes)
-    
-    surface_infos = client_3D.get_observed_surfaces()
-    tasks = hl2ss.sm_mesh_task()
-    for surface_info in surface_infos:
-        tasks.add_task(surface_info.id, tpcm, vpf, tif, vnf, normals, bounds)
-    
-    meshes = client_3D.get_meshes(tasks, threads)
-    
-    client_3D.close()
-    
-    print(f'Observed {len(surface_infos)} surfaces')
-    
-    # Combine all meshes into one -------------------------------------------------
-    combined_mesh = o3d.geometry.TriangleMesh()
-    
-    for index, mesh in meshes.items():
-        id_hex = surface_infos[index].id.hex()
-        timestamp = surface_infos[index].update_time
-    
-        if mesh is None:
-            print(f'Task {index}: surface id {id_hex} compute mesh failed')
-            continue
-        
-        mesh.unpack(vpf, tif, vnf)
-    
-        hl2ss_3dcv.sm_mesh_normalize(mesh)
-        
-        open3d_mesh = hl2ss_sa.sm_mesh_to_open3d_triangle_mesh(mesh)
-        open3d_mesh = hl2ss_sa.open3d_triangle_mesh_swap_winding(open3d_mesh)
-        open3d_mesh.vertex_colors = open3d_mesh.vertex_normals
-    
-        # Offset the indices of the combined mesh
-        triangles = np.asarray(open3d_mesh.triangles) + len(combined_mesh.vertices)
-        
-        # Append vertices and triangles to the combined mesh
-        combined_mesh.vertices.extend(open3d_mesh.vertices)
-        combined_mesh.triangles.extend(o3d.utility.Vector3iVector(triangles))
-        combined_mesh.vertex_colors.extend(open3d_mesh.vertex_colors)
-    
-    # Speichern des kombinierten Meshs mit inkrementeller Benennung -----------------------------------
-    
-    # Sicherstellen, dass das Ausgabeverzeichnis existiert
-    output_dir = data_folder
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Nächsten verfügbaren Dateinamen finden
-    file_index = 1
-    filename = os.path.join(output_dir, f'combined_mesh{file_index}.ply')
-    while os.path.exists(filename):
-        file_index += 1
-        filename = os.path.join(output_dir, f'combined_mesh{file_index}.ply')
-    
-    # Speichern des kombinierten Meshs
-    o3d.io.write_triangle_mesh(filename, combined_mesh)
-    print(f'Saved combined mesh to {filename}')
-    
-    
+if __name__ == "__main__":
+    main()

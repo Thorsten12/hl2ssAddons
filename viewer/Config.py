@@ -2,7 +2,7 @@
 
 # Computer Adress
 HOME = "0.0.0.0" # TODO Muss irgendwie Home Sein
-HOST = "192.168.137.147" # 192.168.178.1
+HOST = "192.168.137.48" # 192.168.178.1
 
 # Camera parameters
 pv_width = 760

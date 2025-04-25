@@ -1,0 +1,195 @@
+import os
+import numpy as np
+from pynput import keyboard
+import multiprocessing as mp
+import open3d as o3d
+import hl2ss
+import hl2ss_lnm
+import hl2ss_mp
+import hl2ss_sa
+import hl2ss_rus
+import Config
+
+# Settings --------------------------------------------------------------------
+host = Config.HOST  # HoloLens address
+buffer_size = 1  # Buffer length in seconds
+tpcm = 0.5  # Reduziert von 1 auf 0.5 Punkte pro Kubikmeter
+threads = 2  # Number of processing threads
+radius = 0.5  # Mapping radius
+voxel_size = 0.05  # Voxel-Größe für Downsampling
+
+# Ordner erstellen
+output_folder = "meshes"
+os.makedirs(output_folder, exist_ok=True)
+
+def get_unique_filename(base_path, filename, ext):
+    counter = 1
+    unique_filename = f"{filename}_{counter}{ext}"
+    while os.path.exists(os.path.join(base_path, unique_filename)):
+        counter += 1
+        unique_filename = f"{filename}_{counter}{ext}"
+    return os.path.join(base_path, unique_filename)
+
+if __name__ == '__main__':
+    enable = True
+
+    def on_press(key):
+        global enable
+        enable = key != keyboard.Key.space
+        return enable
+
+    listener = keyboard.Listener(on_press=on_press)
+    listener.start()
+    
+    vis = o3d.visualization.Visualizer()
+    vis.create_window()
+    vis.get_render_option().mesh_show_back_face = True
+
+    first_geometry = True
+
+    # Kugel am Ursprung
+    origin_sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.05)
+    origin_sphere.paint_uniform_color([1, 0, 0])  # Rot
+    vis.add_geometry(origin_sphere)
+
+    # Linienpfad vorbereiten
+    path_points = []
+    path_lines = []
+    path_colors = [[1, 0, 0]]  # Rot
+
+    line_set = o3d.geometry.LineSet()
+    vis.add_geometry(line_set)
+
+
+    sm_manager = hl2ss_sa.sm_manager(host, tpcm, threads)
+    sm_manager.open()
+
+    producer = hl2ss_mp.producer()
+    producer.configure(hl2ss.StreamPort.SPATIAL_INPUT, hl2ss_lnm.rx_si(host, hl2ss.StreamPort.SPATIAL_INPUT))
+    producer.initialize(hl2ss.StreamPort.SPATIAL_INPUT, buffer_size * hl2ss.Parameters_SI.SAMPLE_RATE)
+    producer.start(hl2ss.StreamPort.SPATIAL_INPUT)
+
+    consumer = hl2ss_mp.consumer()
+    manager = mp.Manager()
+    sink_si = consumer.create_sink(producer, hl2ss.StreamPort.SPATIAL_INPUT, manager, ...)
+    sink_si.get_attach_response()
+
+    combined_mesh = o3d.geometry.TriangleMesh()
+    processed_meshes = set()
+
+    ipc = hl2ss_lnm.ipc_umq(host, hl2ss.IPCPort.UNITY_MESSAGE_QUEUE)
+    ipc.open()
+
+    key = 0
+
+    position = [0, 0, 0]
+    # Initial rotation in world space (x, y, z, w) as a quaternion
+    rotation = [0, 0, 0, 1]
+    # Initial scale in meters
+    scale = [0.05, 0.05, 0.05]
+    # Initial color
+    rgba = [1, 1, 1, 1]
+
+    display_list = hl2ss_rus.command_buffer()
+    display_list.begin_display_list() # Begin command sequence
+    display_list.remove_all() # Remove all objects that were created remotely
+    display_list.create_primitive(hl2ss_rus.PrimitiveType.Sphere) # Create a sphere, server will return its id
+    display_list.set_target_mode(hl2ss_rus.TargetMode.UseLast) # Set server to use the last created object as target, this avoids waiting for the id of the sphere
+    display_list.set_world_transform(key, position, rotation, scale) # Set the world transform of the sphere
+    display_list.set_color(key, rgba) # Set the color of the sphere
+    display_list.set_active(key, hl2ss_rus.ActiveState.Active) # Make the sphere visible
+    display_list.set_target_mode(hl2ss_rus.TargetMode.UseID) # Restore target mode
+    display_list.end_display_list() # End command sequence
+    ipc.push(display_list) # Send commands to server
+    results = ipc.pull(display_list) # Get results from server
+    key = results[2] # Get the sphere id, created by the 3rd command in the list
+
+
+    while enable:
+        sink_si.acquire()
+        _, data_si = sink_si.get_most_recent_frame()
+        if data_si is None:
+            continue
+
+        si = hl2ss.unpack_si(data_si.payload)
+        origin = si.get_head_pose().position
+
+        # Kamera auf Top-Down-Ansicht einstellen
+        #view_ctl = vis.get_view_control()
+        #view_ctl.set_up([0, 0, -1])        # Kamera schaut nach unten
+        #view_ctl.set_lookat([0, 0, 0])     # Kamera schaut auf den Ursprung
+        #view_ctl.set_front([0, 1, 0])     # Kamera schaut entlang der Y-Achse
+        #view_ctl.set_zoom(1)             # Zoom-Level anpassen
+
+        
+
+        volume = hl2ss.sm_bounding_volume()
+        volume.add_sphere(origin, radius)
+        sm_manager.set_volumes(volume)
+
+        sm_manager.get_observed_surfaces()
+        meshes = sm_manager.get_meshes()
+        meshes = [hl2ss_sa.sm_mesh_to_open3d_triangle_mesh(mesh) for mesh in meshes]
+
+        for mesh in meshes:
+            mesh.vertex_colors = mesh.vertex_normals
+            vis.add_geometry(mesh, first_geometry)
+
+        # Kugel aktualisieren
+        origin_sphere.translate(origin - origin_sphere.get_center(), relative=True)
+        vis.update_geometry(origin_sphere)
+
+        # Pfadpunkte aktualisieren
+        path_points.append(origin)
+        if len(path_points) >= 2:
+            path_lines.append([len(path_points) - 2, len(path_points) - 1])
+            line_set.points = o3d.utility.Vector3dVector(path_points)
+            line_set.lines = o3d.utility.Vector2iVector(path_lines)
+            line_set.colors = o3d.utility.Vector3dVector([path_colors[0]] * len(path_lines))
+            vis.update_geometry(line_set)
+
+
+
+        if len(meshes) > 0:
+            first_geometry = False
+            
+        for i, mesh in enumerate(meshes):
+            mesh_center = np.mean(np.asarray(mesh.vertices), axis=0)
+            mesh_id = (tuple(mesh_center), len(mesh.vertices))
+            
+            if mesh_id not in processed_meshes:
+                processed_meshes.add(mesh_id)
+                combined_mesh += mesh
+
+        vis.poll_events()
+        vis.update_renderer()
+
+    print("Führe Voxel-Downsampling durch...")
+    point_cloud = o3d.geometry.PointCloud()
+    point_cloud.points = o3d.utility.Vector3dVector(np.asarray(combined_mesh.vertices))
+    point_cloud.normals = o3d.utility.Vector3dVector(np.asarray(combined_mesh.vertex_normals))
+    downsampled_cloud = point_cloud.voxel_down_sample(voxel_size)
+
+    print("Führe Poisson-Rekonstruktion durch...")
+    poisson_mesh, _ = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
+    downsampled_cloud, depth=8, width=0, scale=1.1, linear_fit=False)
+
+    print("Führe Quadric-Dezimierung durch...")
+    target_reduction = 0.2  
+    simplified_mesh = poisson_mesh.simplify_quadric_decimation(
+        int(len(poisson_mesh.triangles) * target_reduction))
+    simplified_mesh.compute_vertex_normals()
+
+    file_path = get_unique_filename(output_folder, "spatial_mapping_mesh", ".ply")
+    #o3d.io.write_triangle_mesh(file_path, combined_mesh)
+    print(f"Mesh gespeichert unter: {file_path}")
+    print(f"Größe des ursprünglichen Meshes: {len(combined_mesh.vertices)} Vertices, {len(combined_mesh.triangles)} Dreiecke")
+
+    file_path_simplified = get_unique_filename(output_folder, "spatial_mapping_mesh_simplified", ".ply")
+    #o3d.io.write_triangle_mesh(file_path_simplified, simplified_mesh)
+    print(f"Vereinfachtes Mesh gespeichert unter: {file_path_simplified}")
+    print(f"Größe des vereinfachten Meshes: {len(simplified_mesh.vertices)} Vertices, {len(simplified_mesh.triangles)} Dreiecke")
+
+    sink_si.detach()
+    producer.stop(hl2ss.StreamPort.SPATIAL_INPUT)
+    listener.join()
