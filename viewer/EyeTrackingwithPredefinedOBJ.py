@@ -312,7 +312,8 @@ def main():
     sm_manager.open()
 
     # Set Surfaces
-    dummy_dict = SM_convert.sm_mesh_to_sm_manager("C:/Users/admin/Desktop/hl2ss/viewer/meshes/spatial_mapping_mesh_1.ply")
+    dummy_dict = SM_convert.sm_mesh_to_sm_manager("C:/Users/Tsyri/OneDrive/Desktop/hl2ssAddons/hl2ss2_27_04/hl2ssAddons/viewer/meshes/spatial_mapping_mesh_1.ply")
+    
     
     sm_manager.set_surfaces(dummy_dict)
     

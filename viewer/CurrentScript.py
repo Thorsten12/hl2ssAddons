@@ -18,12 +18,13 @@ import csv
 import os
 import datetime
 import threading
+import Config
 
 
 # Settings --------------------------------------------------------------------
 
 # HoloLens 2 address
-host = "192.168.137.140"
+host = Config.HOST
 # Camera parameters
 # See etc/hl2_capture_formats.txt for a list of supported formats
 pv_width     = 760
